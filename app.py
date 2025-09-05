@@ -10,14 +10,8 @@ st.write("Upload a song and I’ll guess the chords & strumming pattern!")
 uploaded_file = st.file_uploader("Choose a song file", type=["mp3", "wav"])
 
 if uploaded_file is not None:
-    # Load audio (first 20 sec for speed)
-    y, sr = librosa.load(uploaded_file, duration=20)
-
-    # Extract harmonic part (for chords)
-    y_harmonic, _ = librosa.effects.hpss(y)
-
-    # Get chroma (pitches over time)
-    chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=sr)
+    # Get total duration of the file
+    total_duration = librosa.get_duration(path=uploaded_file)
 
     # Chord names
     chords = ["C", "C#", "D", "D#", "E", "F",
@@ -25,14 +19,22 @@ if uploaded_file is not None:
 
     progression = []
     times = []
-    window_size = int(3 * sr / 512)  # ~3 sec windows
+    chunk_size = 15  # seconds per chunk (faster!)
 
-    for i in range(0, chroma.shape[1], window_size):
-        window = np.mean(chroma[:, i:i+window_size], axis=1)
-        if window.size > 0:
-            chord = chords[np.argmax(window)]
-            progression.append(chord)
-            times.append(i * 512 / sr)  # convert frame index to time in seconds
+    for start in range(0, int(total_duration), chunk_size):
+        # Load only a small part (chunk) of the song
+        y, sr = librosa.load(uploaded_file, offset=start, duration=chunk_size, sr=11025)  # downsample for speed
+
+        # Extract harmonic part (for chords)
+        y_harmonic, _ = librosa.effects.hpss(y)
+
+        # Get chroma
+        chroma = librosa.feature.chroma_stft(y=y_harmonic, sr=sr)  # faster than chroma_cqt
+        chroma_mean = np.mean(chroma, axis=1)
+
+        chord = chords[np.argmax(chroma_mean)]
+        progression.append(chord)
+        times.append(start)
 
     # Beat tracking (for strumming pattern)
     tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
@@ -59,13 +61,14 @@ if uploaded_file is not None:
     fig, ax = plt.subplots(figsize=(10, 2))
 
     for i, chord in enumerate(progression):
-        ax.barh(0, width=3, left=times[i], height=0.5, align="center", label=chord if i == 0 else "")
+        ax.barh(0, width=chunk_size, left=times[i], height=0.5,
+                align="center", label=chord if i == 0 else "")
+        ax.text(times[i] + chunk_size/2, 0.1, chord, ha="center", va="bottom", fontsize=10)
 
-        # Label chord above the bar
-        ax.text(times[i] + 1.5, 0.1, chord, ha="center", va="bottom", fontsize=10, rotation=0)
-
-    ax.set_xlim(0, max(times) + 3)
+    ax.set_xlim(0, max(times) + chunk_size)
     ax.set_yticks([])
     ax.set_xlabel("Time (seconds)")
     ax.set_title("Chord Progression Timeline")
     st.pyplot(fig)
+
+   
